@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-TOKEN = os.getenv("8166137355:AAEjmCtksJaKPeJjx4cWYtCNeGUTCk9gkw8")
+TOKEN = os.getenv(8166137355:AAEjmCtksJaKPeJjx4cWYtCNeGUTCk9gkw8)
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
