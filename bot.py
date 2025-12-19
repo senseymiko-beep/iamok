@@ -1,7 +1,7 @@
 import asyncio
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, time
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -11,11 +11,11 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 # ---------------- НАСТРОЙКИ ----------------
-DEFAULT_CHECK_HOUR = 9        # 09:00
-DEFAULT_TIMEOUT = 30          # минут
+DEFAULT_CHECK_HOUR = 9
+DEFAULT_TIMEOUT = 30  # минут
 
 # ---------------- БАЗА ----------------
-conn = sqlite3.connect("data.db")
+conn = sqlite3.connect("data.db", check_same_thread=False)
 cursor = conn.cursor()
 
 cursor.execute("""
@@ -24,7 +24,9 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT,
     is_active INTEGER DEFAULT 1,
     check_hour INTEGER,
-    timeout_minutes INTEGER
+    timeout_minutes INTEGER,
+    last_lat REAL,
+    last_lon REAL
 )
 """)
 
@@ -48,7 +50,7 @@ CREATE TABLE IF NOT EXISTS checks (
 
 conn.commit()
 
-# ---------------- КОМАНДЫ ----------------
+# ---------------- СТАРТ ----------------
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
@@ -65,16 +67,49 @@ async def start(message: types.Message):
     conn.commit()
 
     await message.answer(
-        "👋 Я бот заботы.\n\n"
-        "📌 Команды:\n"
-        "/add_contact — добавить близкого\n"
-        "/checkin — проверить сейчас\n"
-        "/settings — настройки\n"
-        "/pause — пауза\n"
-        "/resume — включить обратно"
+        "👋 Бот заботы активен.\n\n"
+        "/add_contact — добавить контакт\n"
+        "/contacts — список контактов\n"
+        "/checkin — проверка сейчас\n"
+        "/pause /resume — пауза\n"
+        "/settings — настройки"
     )
 
-# ---------- КОНТАКТЫ ----------
+# ---------------- КОНТАКТЫ ----------------
+
+@dp.message(Command("contacts"))
+async def list_contacts(message: types.Message):
+    cursor.execute(
+        "SELECT id, type, value FROM contacts WHERE user_id=?",
+        (message.from_user.id,)
+    )
+    rows = cursor.fetchall()
+
+    if not rows:
+        await message.answer("📭 Контактов пока нет")
+        return
+
+    text = "📇 Твои контакты:\n\n"
+    for cid, t, v in rows:
+        label = "Telegram" if t == "telegram" else "Телефон"
+        text += f"{cid}. {label}: {v}\n"
+
+    await message.answer(text)
+
+@dp.message(Command("remove_contact"))
+async def remove_contact(message: types.Message):
+    await message.answer("✍️ Напиши ID контакта из списка")
+
+@dp.message(lambda m: m.text and m.text.isdigit())
+async def delete_contact(message: types.Message):
+    cursor.execute(
+        "DELETE FROM contacts WHERE id=? AND user_id=?",
+        (int(message.text), message.from_user.id)
+    )
+    conn.commit()
+    await message.answer("🗑 Контакт удалён")
+
+# ---------------- ДОБАВЛЕНИЕ ----------------
 
 @dp.message(Command("add_contact"))
 async def add_contact(message: types.Message):
@@ -89,13 +124,12 @@ async def add_contact(message: types.Message):
 @dp.callback_query(lambda c: c.data == "ct_tg")
 async def add_tg(callback: types.CallbackQuery):
     await callback.message.answer(
-        "👉 Перешли мне сообщение от человека.\n"
-        "Он должен написать боту /start."
+        "👉 Перешли сообщение человека.\nОн должен написать боту /start."
     )
 
 @dp.callback_query(lambda c: c.data == "ct_phone")
 async def add_phone(callback: types.CallbackQuery):
-    await callback.message.answer("📞 Отправь номер телефона текстом")
+    await callback.message.answer("📞 Отправь номер телефона")
 
 @dp.message(lambda m: m.forward_from)
 async def save_tg_contact(message: types.Message):
@@ -113,9 +147,20 @@ async def save_phone(message: types.Message):
         (message.from_user.id, message.text)
     )
     conn.commit()
-    await message.answer("📞 Телефон сохранён (SMS подключим позже)")
+    await message.answer("📞 Телефон сохранён")
 
-# ---------- ПРОВЕРКА ----------
+# ---------------- ГЕОЛОКАЦИЯ ----------------
+
+@dp.message(content_types=types.ContentType.LOCATION)
+async def save_location(message: types.Message):
+    cursor.execute(
+        "UPDATE users SET last_lat=?, last_lon=? WHERE user_id=?",
+        (message.location.latitude, message.location.longitude, message.from_user.id)
+    )
+    conn.commit()
+    await message.answer("📍 Геолокация сохранена")
+
+# ---------------- ПРОВЕРКИ ----------------
 
 @dp.message(Command("checkin"))
 async def checkin(message: types.Message):
@@ -148,11 +193,11 @@ async def response(callback: types.CallbackQuery):
 
     if callback.data == "help":
         await notify_contacts(callback.from_user.id, urgent=True)
-        await callback.message.answer("🚨 Я уведомил близких")
+        await callback.message.answer("🚨 Я уведомил контакты")
     else:
         await callback.message.answer("❤️ Спасибо, что ответил")
 
-# ---------- ТАЙМЕР ----------
+# ---------------- ТАЙМЕР ----------------
 
 async def wait_timeout(user_id):
     cursor.execute(
@@ -170,7 +215,7 @@ async def wait_timeout(user_id):
     if cursor.fetchone()[0] == 0:
         await notify_contacts(user_id, urgent=False)
 
-# ---------- УВЕДОМЛЕНИЯ ----------
+# ---------------- УВЕДОМЛЕНИЯ ----------------
 
 async def notify_contacts(user_id, urgent):
     cursor.execute(
@@ -179,36 +224,47 @@ async def notify_contacts(user_id, urgent):
     )
     contacts = cursor.fetchall()
 
+    cursor.execute(
+        "SELECT last_lat, last_lon FROM users WHERE user_id=?",
+        (user_id,)
+    )
+    lat, lon = cursor.fetchone()
+
     text = (
         "🆘 Пользователь запросил помощь!"
         if urgent else
-        "⚠️ Пользователь не ответил на проверку состояния."
+        "⚠️ Пользователь не ответил на проверку."
     )
 
     for t, v in contacts:
         if t == "telegram":
             try:
                 await bot.send_message(int(v), text)
+                if lat and lon:
+                    await bot.send_location(int(v), lat, lon)
             except:
                 pass
 
-# ---------- НАСТРОЙКИ ----------
+# ---------------- ДНЕВНЫЕ ПРОВЕРКИ ----------------
 
-@dp.message(Command("pause"))
-async def pause(message: types.Message):
-    cursor.execute("UPDATE users SET is_active=0 WHERE user_id=?", (message.from_user.id,))
-    conn.commit()
-    await message.answer("⏸ Проверки приостановлены")
+async def daily_checks():
+    while True:
+        now = datetime.now()
+        cursor.execute(
+            "SELECT user_id, check_hour FROM users WHERE is_active=1"
+        )
+        users = cursor.fetchall()
 
-@dp.message(Command("resume"))
-async def resume(message: types.Message):
-    cursor.execute("UPDATE users SET is_active=1 WHERE user_id=?", (message.from_user.id,))
-    conn.commit()
-    await message.answer("▶️ Проверки возобновлены")
+        for uid, hour in users:
+            if now.hour == hour and now.minute == 0:
+                await create_check(uid)
+
+        await asyncio.sleep(60)
 
 # ---------------- ЗАПУСК ----------------
 
 async def main():
+    asyncio.create_task(daily_checks())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
