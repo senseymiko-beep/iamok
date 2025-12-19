@@ -151,11 +151,15 @@ async def save_phone(message: types.Message):
 
 # ---------------- ГЕОЛОКАЦИЯ ----------------
 
-@dp.message(content_types=types.ContentType.LOCATION)
+@dp.message(lambda m: m.location is not None)
 async def save_location(message: types.Message):
     cursor.execute(
         "UPDATE users SET last_lat=?, last_lon=? WHERE user_id=?",
-        (message.location.latitude, message.location.longitude, message.from_user.id)
+        (
+            message.location.latitude,
+            message.location.longitude,
+            message.from_user.id
+        )
     )
     conn.commit()
     await message.answer("📍 Геолокация сохранена")
