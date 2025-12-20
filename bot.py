@@ -2,6 +2,8 @@ import asyncio
 import os
 import sqlite3
 
+from datetime import datetime, date
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -19,8 +21,10 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     name TEXT,
-    check_hour INTEGER DEFAULT 9
+    check_hour INTEGER DEFAULT 9,
+    last_check_date TEXT
 )
+
 
 """)
 
@@ -171,6 +175,34 @@ async def handle_buttons(message: Message):
     if text.startswith("⬅️"):
         await message.answer("🏠 Главное меню", reply_markup=main_menu())
         return
+        
+ async def daily_checks():
+    while True:
+        now = datetime.now()
+        today = date.today().isoformat()
+
+        cursor.execute(
+            "SELECT user_id, check_hour, last_check_date FROM users"
+        )
+        users = cursor.fetchall()
+
+        for user_id, hour, last_date in users:
+            if now.hour == hour and last_date != today:
+                try:
+                    await bot.send_message(
+                        user_id,
+                        "💬 Ты в порядке?\n\n"
+                        "Если не ответишь — я уведомлю твоих близких."
+                    )
+                    cursor.execute(
+                        "UPDATE users SET last_check_date=? WHERE user_id=?",
+                        (today, user_id)
+                    )
+                    conn.commit()
+                except:
+                    pass
+
+        await asyncio.sleep(60)
 
 # ---------- ПРИЁМ ПЕРЕСЛАННОГО КОНТАКТА ----------
 
@@ -203,6 +235,7 @@ async def notify_contacts(user_id: int):
 # ---------- ЗАПУСК ----------
 async def main():
     print("Bot polling started")
+    asyncio.create_task(daily_checks())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
