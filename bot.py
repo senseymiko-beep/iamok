@@ -1,29 +1,19 @@
 import asyncio
 import os
 import sqlite3
-from datetime import datetime, time
+from datetime import datetime
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-def location_keyboard():
-    return types.ReplyKeyboardMarkup(
-        keyboard=[
-            [types.KeyboardButton(
-                text="📍 Отправить геолокацию",
-                request_location=True
-            )]
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-
-TOKEN = os.getenv("BOT_TOKEN")
-bot = Bot(token=TOKEN)
-dp = Dispatcher()
 
 # ---------------- НАСТРОЙКИ ----------------
-DEFAULT_CHECK_HOUR = 9
-DEFAULT_TIMEOUT = 30  # минут
+TOKEN = os.getenv("BOT_TOKEN")
+
+DEFAULT_CHECK_HOUR = 9     # ежедневная проверка в 09:00
+DEFAULT_TIMEOUT = 30       # минут ожидания ответа
+
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
 
 # ---------------- БАЗА ----------------
 conn = sqlite3.connect("data.db", check_same_thread=False)
@@ -35,9 +25,7 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT,
     is_active INTEGER DEFAULT 1,
     check_hour INTEGER,
-    timeout_minutes INTEGER,
-    last_lat REAL,
-    last_lon REAL
+    timeout_minutes INTEGER
 )
 """)
 
@@ -46,7 +34,8 @@ CREATE TABLE IF NOT EXISTS contacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     type TEXT,
-    value TEXT
+    value TEXT,
+    name TEXT
 )
 """)
 
@@ -61,7 +50,7 @@ CREATE TABLE IF NOT EXISTS checks (
 
 conn.commit()
 
-# ---------------- СТАРТ ----------------
+# ---------------- START ----------------
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
@@ -71,7 +60,7 @@ async def start(message: types.Message):
     VALUES (?, ?, ?, ?)
     """, (
         message.from_user.id,
-        message.from_user.username,
+        message.from_user.full_name,
         DEFAULT_CHECK_HOUR,
         DEFAULT_TIMEOUT
     ))
@@ -79,19 +68,40 @@ async def start(message: types.Message):
 
     await message.answer(
         "👋 Бот заботы активен.\n\n"
+        "📌 Команды:\n"
         "/add_contact — добавить контакт\n"
         "/contacts — список контактов\n"
+        "/remove_contact — удалить контакт\n"
         "/checkin — проверка сейчас\n"
-        "/pause /resume — пауза\n"
-        "/settings — настройки"
+        "/pause — пауза\n"
+        "/resume — продолжить"
     )
 
 # ---------------- КОНТАКТЫ ----------------
 
+@dp.message(Command("add_contact"))
+async def add_contact(message: types.Message):
+    await message.answer(
+        "👉 Перешли мне сообщение от человека.\n"
+        "Он должен написать боту /start."
+    )
+
+@dp.message(lambda m: m.forward_from is not None)
+async def save_contact(message: types.Message):
+    tg = message.forward_from
+
+    cursor.execute(
+        "INSERT INTO contacts (user_id, type, value, name) VALUES (?, 'telegram', ?, ?)",
+        (message.from_user.id, tg.id, tg.full_name)
+    )
+    conn.commit()
+
+    await message.answer(f"✅ Контакт добавлен: {tg.full_name}")
+
 @dp.message(Command("contacts"))
 async def list_contacts(message: types.Message):
     cursor.execute(
-        "SELECT id, type, value FROM contacts WHERE user_id=?",
+        "SELECT id, name FROM contacts WHERE user_id=?",
         (message.from_user.id,)
     )
     rows = cursor.fetchall()
@@ -101,9 +111,8 @@ async def list_contacts(message: types.Message):
         return
 
     text = "📇 Твои контакты:\n\n"
-    for cid, t, v in rows:
-        label = "Telegram" if t == "telegram" else "Телефон"
-        text += f"{cid}. {label}: {v}\n"
+    for cid, name in rows:
+        text += f"{cid}. {name}\n"
 
     await message.answer(text)
 
@@ -118,64 +127,10 @@ async def delete_contact(message: types.Message):
         (int(message.text), message.from_user.id)
     )
     conn.commit()
+
     await message.answer("🗑 Контакт удалён")
 
-# ---------------- ДОБАВЛЕНИЕ ----------------
-
-@dp.message(Command("add_contact"))
-async def add_contact(message: types.Message):
-    kb = types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [types.InlineKeyboardButton(text="📲 Telegram", callback_data="ct_tg")],
-            [types.InlineKeyboardButton(text="☎️ Телефон", callback_data="ct_phone")]
-        ]
-    )
-    await message.answer("Как добавить контакт?", reply_markup=kb)
-
-@dp.callback_query(lambda c: c.data == "ct_tg")
-async def add_tg(callback: types.CallbackQuery):
-    await callback.message.answer(
-        "👉 Перешли сообщение человека.\nОн должен написать боту /start."
-    )
-
-@dp.callback_query(lambda c: c.data == "ct_phone")
-async def add_phone(callback: types.CallbackQuery):
-    await callback.message.answer("📞 Отправь номер телефона")
-
-@dp.message(lambda m: m.forward_from)
-async def save_tg_contact(message: types.Message):
-    cursor.execute(
-        "INSERT INTO contacts (user_id, type, value) VALUES (?, 'telegram', ?)",
-        (message.from_user.id, message.forward_from.id)
-    )
-    conn.commit()
-    await message.answer("✅ Telegram-контакт добавлен")
-
-@dp.message(lambda m: m.text and m.text.startswith("+"))
-async def save_phone(message: types.Message):
-    cursor.execute(
-        "INSERT INTO contacts (user_id, type, value) VALUES (?, 'phone', ?)",
-        (message.from_user.id, message.text)
-    )
-    conn.commit()
-    await message.answer("📞 Телефон сохранён")
-
-# ---------------- ГЕОЛОКАЦИЯ ----------------
-
-@dp.message(lambda m: m.location is not None)
-async def save_location(message: types.Message):
-    cursor.execute(
-        "UPDATE users SET last_lat=?, last_lon=? WHERE user_id=?",
-        (
-            message.location.latitude,
-            message.location.longitude,
-            message.from_user.id
-        )
-    )
-    conn.commit()
-    await message.answer("📍 Геолокация сохранена")
-
-# ---------------- ПРОВЕРКИ ----------------
+# ---------------- ПРОВЕРКА ----------------
 
 @dp.message(Command("checkin"))
 async def checkin(message: types.Message):
@@ -188,14 +143,14 @@ async def create_check(user_id):
     )
     conn.commit()
 
-    kb = types.InlineKeyboardMarkup(
+    keyboard = types.InlineKeyboardMarkup(
         inline_keyboard=[
             [types.InlineKeyboardButton(text="✅ Я в порядке", callback_data="ok")],
             [types.InlineKeyboardButton(text="🆘 Мне нужна помощь", callback_data="help")]
         ]
     )
 
-    await bot.send_message(user_id, "💬 Ты в порядке?", reply_markup=kb)
+    await bot.send_message(user_id, "💬 Ты в порядке?", reply_markup=keyboard)
     asyncio.create_task(wait_timeout(user_id))
 
 @dp.callback_query(lambda c: c.data in ["ok", "help"])
@@ -208,7 +163,7 @@ async def response(callback: types.CallbackQuery):
 
     if callback.data == "help":
         await notify_contacts(callback.from_user.id, urgent=True)
-        await callback.message.answer("🚨 Я уведомил контакты")
+        await callback.message.answer("🚨 Я уведомил твоих близких")
     else:
         await callback.message.answer("❤️ Спасибо, что ответил")
 
@@ -227,54 +182,76 @@ async def wait_timeout(user_id):
         "SELECT responded FROM checks WHERE user_id=? ORDER BY id DESC LIMIT 1",
         (user_id,)
     )
-    if cursor.fetchone()[0] == 0:
+    row = cursor.fetchone()
+
+    if row and row[0] == 0:
         await notify_contacts(user_id, urgent=False)
 
 # ---------------- УВЕДОМЛЕНИЯ ----------------
 
 async def notify_contacts(user_id, urgent):
     cursor.execute(
-        "SELECT type, value FROM contacts WHERE user_id=?",
+        "SELECT username FROM users WHERE user_id=?",
+        (user_id,)
+    )
+    username = cursor.fetchone()[0] or "Пользователь"
+
+    cursor.execute(
+        "SELECT value FROM contacts WHERE user_id=? AND type='telegram'",
         (user_id,)
     )
     contacts = cursor.fetchall()
 
-    cursor.execute(
-        "SELECT last_lat, last_lon FROM users WHERE user_id=?",
-        (user_id,)
-    )
-    lat, lon = cursor.fetchone()
-
     text = (
-        "🆘 Пользователь запросил помощь!"
+        f"🆘 Срочно!\n\n{username} запросил помощь."
         if urgent else
-        "⚠️ Пользователь не ответил на проверку."
+        f"⚠️ Тревога!\n\n{username} не ответил на проверку состояния."
     )
 
-    for t, v in contacts:
-        if t == "telegram":
-            try:
-                await bot.send_message(int(v), text)
-                if lat and lon:
-                    await bot.send_location(int(v), lat, lon)
-            except:
-                pass
+    for (contact_id,) in contacts:
+        try:
+            await bot.send_message(int(contact_id), text)
+        except:
+            pass
 
 # ---------------- ДНЕВНЫЕ ПРОВЕРКИ ----------------
 
 async def daily_checks():
     while True:
         now = datetime.now()
+
         cursor.execute(
             "SELECT user_id, check_hour FROM users WHERE is_active=1"
         )
         users = cursor.fetchall()
 
-        for uid, hour in users:
+        for user_id, hour in users:
             if now.hour == hour and now.minute == 0:
-                await create_check(uid)
+                await create_check(user_id)
 
         await asyncio.sleep(60)
+
+# ---------------- ПАУЗА ----------------
+
+@dp.message(Command("pause"))
+async def pause(message: types.Message):
+    cursor.execute(
+        "UPDATE users SET is_active=0 WHERE user_id=?",
+        (message.from_user.id,)
+    )
+    conn.commit()
+
+    await message.answer("⏸ Проверки приостановлены")
+
+@dp.message(Command("resume"))
+async def resume(message: types.Message):
+    cursor.execute(
+        "UPDATE users SET is_active=1 WHERE user_id=?",
+        (message.from_user.id,)
+    )
+    conn.commit()
+
+    await message.answer("▶️ Проверки возобновлены")
 
 # ---------------- ЗАПУСК ----------------
 
