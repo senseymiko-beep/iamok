@@ -5,6 +5,17 @@ from datetime import datetime, time
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
+def location_keyboard():
+    return types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(
+                text="📍 Отправить геолокацию",
+                request_location=True
+            )]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
 
 TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TOKEN)
