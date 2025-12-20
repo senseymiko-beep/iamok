@@ -53,6 +53,14 @@ def main_menu():
         ],
         resize_keyboard=True
     )
+def check_menu():
+    return types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="❤️ Я в порядке")],
+            [types.KeyboardButton(text="🚨 Мне нужна помощь")]
+        ],
+        resize_keyboard=True
+    )
 
 def contacts_menu():
     return types.ReplyKeyboardMarkup(
@@ -87,6 +95,35 @@ async def start(message: Message):
 @dp.message()
 async def handle_messages(message: Message):
     text = (message.text or "").strip()
+    # ❤️ пользователь ответил — всё хорошо
+    if text.startswith("❤️"):
+        cursor.execute(
+            "UPDATE users SET waiting=0 WHERE user_id=?",
+            (message.from_user.id,)
+        )
+        conn.commit()
+
+        await message.answer(
+            "❤️ Отлично. Рад, что ты в порядке.",
+            reply_markup=main_menu()
+        )
+        return
+
+    # 🚨 пользователь сам запросил помощь
+    if text.startswith("🚨"):
+        cursor.execute(
+            "UPDATE users SET waiting=0 WHERE user_id=?",
+            (message.from_user.id,)
+        )
+        conn.commit()
+
+        await notify_contacts(message.from_user.id)
+
+        await message.answer(
+            "🚨 Я уведомил твоих близких",
+            reply_markup=main_menu()
+        )
+        return
 
     # ---------- пересланный контакт ----------
     if message.forward_from is not None:
@@ -178,7 +215,7 @@ async def handle_messages(message: Message):
             return
 
         cursor.execute(
-            "UPDATE users SET check_hour=? WHERE user_id=?",
+            "UPDATE users SET _hour=? WHERE user_id=?",
             (hour, message.from_user.id)
         )
         conn.commit()
@@ -191,7 +228,7 @@ async def handle_messages(message: Message):
 
 # ================== АВТОПРОВЕРКА ==================
 
-async def daily_checks():
+async def daily_s():
     while True:
         try:
             now = datetime.now()
@@ -205,10 +242,19 @@ async def daily_checks():
             for user_id, hour, last_date in users:
                 if now.hour == hour and last_date != today:
                     await bot.send_message(
-                        user_id,
-                        "💬 Ты в порядке?\n\n"
-                        "Если не ответишь — я уведомлю твоих близких."
-                    )
+    user_id,
+    "💬 Ты в порядке?",
+    reply_markup=check_menu()
+)
+
+cursor.execute(
+    "UPDATE users SET last_check_date=?, waiting=1 WHERE user_id=?",
+    (today, user_id)
+)
+conn.commit()
+
+asyncio.create_task(wait_for_answer(user_id))
+
                     cursor.execute(
                         "UPDATE users SET last_check_date=? WHERE user_id=?",
                         (today, user_id)
@@ -219,6 +265,37 @@ async def daily_checks():
             print("daily_checks error:", e)
 
         await asyncio.sleep(60)
+
+async def wait_for_answer(user_id: int):
+    try:
+        cursor.execute(
+            "SELECT timeout_minutes FROM users WHERE user_id=?",
+            (user_id,)
+        )
+        timeout = cursor.fetchone()[0]
+
+        # ждём N минут
+        await asyncio.sleep(timeout * 60)
+
+        # проверяем, ответил ли пользователь
+        cursor.execute(
+            "SELECT waiting FROM users WHERE user_id=?",
+            (user_id,)
+        )
+        waiting = cursor.fetchone()[0]
+
+        # если не ответил — тревога
+        if waiting == 1:
+            await notify_contacts(user_id)
+
+            cursor.execute(
+                "UPDATE users SET waiting=0 WHERE user_id=?",
+                (user_id,)
+            )
+            conn.commit()
+
+    except Exception as e:
+        print("wait_for_answer error:", e)
 
 # ================== УВЕДОМЛЕНИЯ ==================
 
