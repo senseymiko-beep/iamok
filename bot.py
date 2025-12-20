@@ -3,7 +3,7 @@ import os
 import sqlite3
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command, Text
+from aiogram.filters import Command
 from aiogram.types import Message
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -11,7 +11,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# ---------------- БАЗА ----------------
+# ---------- БАЗА ----------
 conn = sqlite3.connect("data.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -33,13 +33,12 @@ CREATE TABLE IF NOT EXISTS contacts (
 
 conn.commit()
 
-# ---------------- КНОПКИ ----------------
-
+# ---------- КНОПКИ ----------
 def main_menu():
     return types.ReplyKeyboardMarkup(
         keyboard=[
-            ["🚨 Мне нужна помощь"],
-            ["📇 Контакты"]
+            [types.KeyboardButton(text="🚨 Мне нужна помощь")],
+            [types.KeyboardButton(text="📇 Контакты")]
         ],
         resize_keyboard=True
     )
@@ -47,17 +46,16 @@ def main_menu():
 def contacts_menu():
     return types.ReplyKeyboardMarkup(
         keyboard=[
-            ["➕ Добавить контакт"],
-            ["📄 Список контактов"],
-            ["⬅️ Назад"]
+            [types.KeyboardButton(text="➕ Добавить контакт")],
+            [types.KeyboardButton(text="📄 Список контактов")],
+            [types.KeyboardButton(text="⬅️ Назад")]
         ],
         resize_keyboard=True
     )
 
-# ---------------- START ----------------
-
+# ---------- START ----------
 @dp.message(Command("start"))
-async def start_cmd(message: Message):
+async def start(message: Message):
     cursor.execute(
         "INSERT OR IGNORE INTO users (user_id, name) VALUES (?, ?)",
         (message.from_user.id, message.from_user.full_name)
@@ -66,37 +64,65 @@ async def start_cmd(message: Message):
 
     await message.answer(
         f"👋 Привет, {message.from_user.full_name}!\n\n"
-        "Если тебе станет плохо — нажми кнопку ниже.\n"
-        "Я уведомлю твоих близких.",
+        "Если тебе станет плохо — нажми кнопку ниже.",
         reply_markup=main_menu()
     )
 
-# ---------------- ГЛАВНОЕ МЕНЮ ----------------
+# ---------- ЕДИНЫЙ ОБРАБОТЧИК КНОПОК ----------
+@dp.message()
+async def handle_buttons(message: Message):
+    text = (message.text or "").strip()
 
-@dp.message(Text("🚨 Мне нужна помощь"))
-async def help_now(message: Message):
-    await notify_contacts(message.from_user.id)
-    await message.answer(
-        "🚨 Я уведомил твоих близких",
-        reply_markup=main_menu()
-    )
+    # 🆘 помощь
+    if text.startswith("🚨"):
+        await notify_contacts(message.from_user.id)
+        await message.answer(
+            "🚨 Я уведомил твоих близких",
+            reply_markup=main_menu()
+        )
+        return
 
-@dp.message(Text("📇 Контакты"))
-async def contacts_cmd(message: Message):
-    await message.answer(
-        "📇 Управление контактами",
-        reply_markup=contacts_menu()
-    )
+    # 📇 контакты
+    if text.startswith("📇"):
+        await message.answer(
+            "📇 Управление контактами",
+            reply_markup=contacts_menu()
+        )
+        return
 
-# ---------------- КОНТАКТЫ ----------------
+    # ➕ добавить
+    if text.startswith("➕"):
+        await message.answer(
+            "👉 Перешли мне сообщение человека.\n"
+            "Он должен написать боту /start."
+        )
+        return
 
-@dp.message(Text("➕ Добавить контакт"))
-async def add_contact(message: Message):
-    await message.answer(
-        "👉 Перешли мне сообщение человека.\n"
-        "Он должен написать боту /start."
-    )
+    # 📄 список
+    if text.startswith("📄"):
+        cursor.execute(
+            "SELECT name FROM contacts WHERE user_id=?",
+            (message.from_user.id,)
+        )
+        rows = cursor.fetchall()
 
+        if not rows:
+            await message.answer("📭 Контактов пока нет", reply_markup=contacts_menu())
+            return
+
+        msg = "📇 Твои контакты:\n\n"
+        for (name,) in rows:
+            msg += f"• {name}\n"
+
+        await message.answer(msg, reply_markup=contacts_menu())
+        return
+
+    # ⬅️ назад
+    if text.startswith("⬅️"):
+        await message.answer("🏠 Главное меню", reply_markup=main_menu())
+        return
+
+# ---------- ПРИЁМ ПЕРЕСЛАННОГО КОНТАКТА ----------
 @dp.message(lambda m: m.forward_from is not None)
 async def save_contact(message: Message):
     tg = message.forward_from
@@ -112,36 +138,7 @@ async def save_contact(message: Message):
         reply_markup=contacts_menu()
     )
 
-@dp.message(Text("📄 Список контактов"))
-async def list_contacts(message: Message):
-    cursor.execute(
-        "SELECT name FROM contacts WHERE user_id=?",
-        (message.from_user.id,)
-    )
-    rows = cursor.fetchall()
-
-    if not rows:
-        await message.answer(
-            "📭 Контактов пока нет",
-            reply_markup=contacts_menu()
-        )
-        return
-
-    text = "📇 Твои контакты:\n\n"
-    for (name,) in rows:
-        text += f"• {name}\n"
-
-    await message.answer(text, reply_markup=contacts_menu())
-
-@dp.message(Text("⬅️ Назад"))
-async def back(message: Message):
-    await message.answer(
-        "🏠 Главное меню",
-        reply_markup=main_menu()
-    )
-
-# ---------------- УВЕДОМЛЕНИЯ ----------------
-
+# ---------- УВЕДОМЛЕНИЯ ----------
 async def notify_contacts(user_id: int):
     cursor.execute(
         "SELECT name FROM users WHERE user_id=?",
@@ -167,8 +164,7 @@ async def notify_contacts(user_id: int):
         except:
             pass
 
-# ---------------- ЗАПУСК ----------------
-
+# ---------- ЗАПУСК ----------
 async def main():
     print("Bot polling started")
     await dp.start_polling(bot)
