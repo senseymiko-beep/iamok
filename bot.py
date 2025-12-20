@@ -72,6 +72,20 @@ async def start(message: Message):
 @dp.message()
 async def handle_buttons(message: Message):
     text = (message.text or "").strip()
+    # 📥 переслан контакт
+    if message.forward_from is not None:
+        tg = message.forward_from
+        cursor.execute(
+            "INSERT INTO contacts (user_id, tg_id, name) VALUES (?, ?, ?)",
+            (message.from_user.id, tg.id, tg.full_name)
+        )
+        conn.commit()
+
+        await message.answer(
+            f"✅ Контакт добавлен: {tg.full_name}",
+            reply_markup=contacts_menu()
+        )
+        return
 
     # 🆘 помощь
     if text.startswith("🚨"):
@@ -123,20 +137,6 @@ async def handle_buttons(message: Message):
         return
 
 # ---------- ПРИЁМ ПЕРЕСЛАННОГО КОНТАКТА ----------
-@dp.message(lambda m: m.forward_from is not None)
-async def save_contact(message: Message):
-    tg = message.forward_from
-
-    cursor.execute(
-        "INSERT INTO contacts (user_id, tg_id, name) VALUES (?, ?, ?)",
-        (message.from_user.id, tg.id, tg.full_name)
-    )
-    conn.commit()
-
-    await message.answer(
-        f"✅ Контакт добавлен: {tg.full_name}",
-        reply_markup=contacts_menu()
-    )
 
 # ---------- УВЕДОМЛЕНИЯ ----------
 async def notify_contacts(user_id: int):
