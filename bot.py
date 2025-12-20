@@ -38,10 +38,11 @@ conn.commit()
 # ---------- КНОПКИ ----------
 def main_menu():
     return types.ReplyKeyboardMarkup(
-        keyboard=[
-            [types.KeyboardButton(text="🚨 Мне нужна помощь")],
-            [types.KeyboardButton(text="📇 Контакты")]
-        ],
+       keyboard=[
+    [types.KeyboardButton(text="🚨 Мне нужна помощь")],
+    [types.KeyboardButton(text="📇 Контакты")],
+    [types.KeyboardButton(text="⏰ Время проверки")]
+],
         resize_keyboard=True
     )
 
@@ -86,6 +87,39 @@ async def handle_buttons(message: Message):
         await message.answer(
             f"✅ Контакт добавлен: {tg.full_name}",
             reply_markup=contacts_menu()
+        )
+        return
+    # ⏰ выбор времени проверки
+    if text.startswith("⏰"):
+        keyboard = types.ReplyKeyboardMarkup(
+            keyboard=[
+                [types.KeyboardButton(text=f"{h:02d}:00")]
+                for h in range(6, 23)
+            ] + [[types.KeyboardButton(text="⬅️ Назад")]],
+            resize_keyboard=True
+        )
+
+        await message.answer(
+            "⏰ Во сколько тебе писать «Ты в порядке?»",
+            reply_markup=keyboard
+        )
+        return
+    # 🕘 сохранение выбранного часа
+    if ":" in text and text.endswith(":00"):
+        try:
+            hour = int(text.split(":")[0])
+        except ValueError:
+            return
+
+        cursor.execute(
+            "UPDATE users SET check_hour=? WHERE user_id=?",
+            (hour, message.from_user.id)
+        )
+        conn.commit()
+
+        await message.answer(
+            f"✅ Отлично! Я буду писать тебе каждый день в {hour:02d}:00",
+            reply_markup=main_menu()
         )
         return
 
