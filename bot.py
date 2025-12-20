@@ -24,8 +24,11 @@ CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     name TEXT,
     check_hour INTEGER DEFAULT 9,
-    last_check_date TEXT
+    last_check_date TEXT,
+    waiting INTEGER DEFAULT 0,
+    timeout_minutes INTEGER DEFAULT 30
 )
+
 """)
 
 cursor.execute("""
