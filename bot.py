@@ -7,8 +7,6 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message
 
-# ================== НАСТРОЙКИ ==================
-
 TOKEN = os.getenv("BOT_TOKEN")
 
 bot = Bot(token=TOKEN)
@@ -28,7 +26,6 @@ CREATE TABLE IF NOT EXISTS users (
     waiting INTEGER DEFAULT 0,
     timeout_minutes INTEGER DEFAULT 30
 )
-
 """)
 
 cursor.execute("""
@@ -53,14 +50,6 @@ def main_menu():
         ],
         resize_keyboard=True
     )
-def check_menu():
-    return types.ReplyKeyboardMarkup(
-        keyboard=[
-            [types.KeyboardButton(text="❤️ Я в порядке")],
-            [types.KeyboardButton(text="🚨 Мне нужна помощь")]
-        ],
-        resize_keyboard=True
-    )
 
 def contacts_menu():
     return types.ReplyKeyboardMarkup(
@@ -68,6 +57,15 @@ def contacts_menu():
             [types.KeyboardButton(text="➕ Добавить контакт")],
             [types.KeyboardButton(text="📄 Список контактов")],
             [types.KeyboardButton(text="⬅️ Назад")]
+        ],
+        resize_keyboard=True
+    )
+
+def check_menu():
+    return types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="❤️ Я в порядке")],
+            [types.KeyboardButton(text="🚨 Мне нужна помощь")]
         ],
         resize_keyboard=True
     )
@@ -83,7 +81,7 @@ async def start(message: Message):
     conn.commit()
 
     await message.answer(
-        f"👋 Привет, {message.from_user.full_name}!\n\n"
+        "👋 Привет!\n\n"
         "Я буду регулярно спрашивать:\n"
         "«Ты в порядке?»\n\n"
         "Если ты не ответишь — я уведомлю твоих близких.",
@@ -95,7 +93,8 @@ async def start(message: Message):
 @dp.message()
 async def handle_messages(message: Message):
     text = (message.text or "").strip()
-    # ❤️ пользователь ответил — всё хорошо
+
+    # ❤️ ответил — всё хорошо
     if text.startswith("❤️"):
         cursor.execute(
             "UPDATE users SET waiting=0 WHERE user_id=?",
@@ -109,7 +108,7 @@ async def handle_messages(message: Message):
         )
         return
 
-    # 🚨 пользователь сам запросил помощь
+    # 🚨 запрос помощи
     if text.startswith("🚨"):
         cursor.execute(
             "UPDATE users SET waiting=0 WHERE user_id=?",
@@ -125,7 +124,7 @@ async def handle_messages(message: Message):
         )
         return
 
-    # ---------- пересланный контакт ----------
+    # пересланный контакт
     if message.forward_from is not None:
         tg = message.forward_from
         cursor.execute(
@@ -140,21 +139,8 @@ async def handle_messages(message: Message):
         )
         return
 
-    # ---------- помощь ----------
-    if text.startswith("🚨"):
-        await notify_contacts(message.from_user.id)
-        await message.answer(
-            "🚨 Я уведомил твоих близких",
-            reply_markup=main_menu()
-        )
-        return
-
-    # ---------- контакты ----------
     if text.startswith("📇"):
-        await message.answer(
-            "📇 Управление контактами",
-            reply_markup=contacts_menu()
-        )
+        await message.answer("📇 Управление контактами", reply_markup=contacts_menu())
         return
 
     if text.startswith("➕"):
@@ -172,10 +158,7 @@ async def handle_messages(message: Message):
         rows = cursor.fetchall()
 
         if not rows:
-            await message.answer(
-                "📭 Контактов пока нет",
-                reply_markup=contacts_menu()
-            )
+            await message.answer("📭 Контактов пока нет", reply_markup=contacts_menu())
             return
 
         msg = "📇 Твои контакты:\n\n"
@@ -186,13 +169,9 @@ async def handle_messages(message: Message):
         return
 
     if text.startswith("⬅️"):
-        await message.answer(
-            "🏠 Главное меню",
-            reply_markup=main_menu()
-        )
+        await message.answer("🏠 Главное меню", reply_markup=main_menu())
         return
 
-    # ---------- выбор времени ----------
     if text.startswith("⏰"):
         keyboard = types.ReplyKeyboardMarkup(
             keyboard=[
@@ -201,7 +180,6 @@ async def handle_messages(message: Message):
             ] + [[types.KeyboardButton(text="⬅️ Назад")]],
             resize_keyboard=True
         )
-
         await message.answer(
             "⏰ Во сколько тебе писать «Ты в порядке?»",
             reply_markup=keyboard
@@ -215,20 +193,20 @@ async def handle_messages(message: Message):
             return
 
         cursor.execute(
-            "UPDATE users SET _hour=? WHERE user_id=?",
+            "UPDATE users SET check_hour=? WHERE user_id=?",
             (hour, message.from_user.id)
         )
         conn.commit()
 
         await message.answer(
-            f"✅ Отлично! Я буду писать тебе каждый день в {hour:02d}:00",
+            f"✅ Я буду писать тебе каждый день в {hour:02d}:00",
             reply_markup=main_menu()
         )
         return
 
 # ================== АВТОПРОВЕРКА ==================
 
-async def daily_s():
+async def daily_checks():
     while True:
         try:
             now = datetime.now()
@@ -242,29 +220,24 @@ async def daily_s():
             for user_id, hour, last_date in users:
                 if now.hour == hour and last_date != today:
                     await bot.send_message(
-    user_id,
-    "💬 Ты в порядке?",
-    reply_markup=check_menu()
-)
-
-cursor.execute(
-    "UPDATE users SET last_check_date=?, waiting=1 WHERE user_id=?",
-    (today, user_id)
-)
-conn.commit()
-
-asyncio.create_task(wait_for_answer(user_id))
-
+                        user_id,
+                        "💬 Ты в порядке?",
+                        reply_markup=check_menu()
+                    )
                     cursor.execute(
-                        "UPDATE users SET last_check_date=? WHERE user_id=?",
+                        "UPDATE users SET last_check_date=?, waiting=1 WHERE user_id=?",
                         (today, user_id)
                     )
                     conn.commit()
+
+                    asyncio.create_task(wait_for_answer(user_id))
 
         except Exception as e:
             print("daily_checks error:", e)
 
         await asyncio.sleep(60)
+
+# ================== ОЖИДАНИЕ ОТВЕТА ==================
 
 async def wait_for_answer(user_id: int):
     try:
@@ -274,17 +247,14 @@ async def wait_for_answer(user_id: int):
         )
         timeout = cursor.fetchone()[0]
 
-        # ждём N минут
         await asyncio.sleep(timeout * 60)
 
-        # проверяем, ответил ли пользователь
         cursor.execute(
             "SELECT waiting FROM users WHERE user_id=?",
             (user_id,)
         )
         waiting = cursor.fetchone()[0]
 
-        # если не ответил — тревога
         if waiting == 1:
             await notify_contacts(user_id)
 
@@ -314,7 +284,7 @@ async def notify_contacts(user_id: int):
 
     text = (
         "🚨 ТРЕВОГА\n\n"
-        f"{username} просит о помощи.\n"
+        f"{username} не ответил на проверку «Ты в порядке?».\n"
         "Пожалуйста, срочно свяжитесь с ним."
     )
 
