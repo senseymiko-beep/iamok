@@ -235,8 +235,8 @@ async def notify_contacts(user_id: int):
 # ---------- ЗАПУСК ----------
 async def main():
     print("Bot polling started")
-  # asyncio.create_task(daily_checks())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
